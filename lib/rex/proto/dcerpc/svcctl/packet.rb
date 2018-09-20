@@ -234,7 +234,7 @@ class Client
   #
   # @return [Integer] Windows error code
   def stopservice(svc_handle)
-    dce_controlservice(svc_handle, SERVICE_CONTROL_STOP)
+    self.controlservice(svc_handle, SERVICE_CONTROL_STOP)
   end
 
   # Controls an existing service.
@@ -304,4 +304,3 @@ class Client
 end
 end
 end
-

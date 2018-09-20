@@ -69,7 +69,7 @@ NTLM_UTILS = Rex::Proto::NTLM::Utils
   # Read a SMB packet from the socket
   def smb_recv
 
-    data = socket.timed_read(4, self.read_timeout)
+    data = self.socket.timed_read(4, self.read_timeout)
     if (data.nil? or data.length < 4)
       raise XCEPT::NoReply
     end
@@ -149,6 +149,7 @@ NTLM_UTILS = Rex::Proto::NTLM::Utils
     packet.v['TreeID'] = self.last_tree_id.to_i
     packet.v['UserID'] = self.auth_user_id.to_i
     packet.v['ProcessID'] = self.process_id.to_i
+    self.multiplex_id = (self.multiplex_id + 16) % 65536
   end
 
   # Receive a full SMB reply and cache the parsed packet
@@ -1175,7 +1176,7 @@ NTLM_UTILS = Rex::Proto::NTLM::Utils
   end
 
   # Creates a file or opens an existing pipe
-  def create(filename, disposition = 1, impersonation = 2, do_recv = true)
+  def create(filename, disposition = 1, impersonation = 2, do_recv = true, andx_offset = 0, create_flags = 0x16, access_mask = 0x02000000, create_options = 0, security_flags = 0)
 
     pkt = CONST::SMB_CREATE_PKT.make_struct
     self.smb_defaults(pkt['Payload']['SMB'])
@@ -1193,13 +1194,15 @@ NTLM_UTILS = Rex::Proto::NTLM::Utils
     pkt['Payload']['SMB'].v['WordCount'] = 24
 
     pkt['Payload'].v['AndX'] = 255
+    pkt['Payload'].v['AndXOffset'] = andx_offset
     pkt['Payload'].v['FileNameLen'] = filename.length
-    pkt['Payload'].v['CreateFlags'] = 0x16
-    pkt['Payload'].v['AccessMask'] = 0x02000000 # Maximum Allowed
+    pkt['Payload'].v['CreateFlags'] = create_flags
+    pkt['Payload'].v['AccessMask'] = access_mask
     pkt['Payload'].v['ShareAccess'] = 7
-    pkt['Payload'].v['CreateOptions'] = 0
+    pkt['Payload'].v['CreateOptions'] = create_options
     pkt['Payload'].v['Impersonation'] = impersonation
     pkt['Payload'].v['Disposition'] = disposition
+    pkt['Payload'].v['SecurityFlags'] = security_flags
     pkt['Payload'].v['Payload'] = filename + "\x00"
 
     ret = self.smb_send(pkt.to_s)
@@ -1353,6 +1356,33 @@ NTLM_UTILS = Rex::Proto::NTLM::Utils
     return ack
   end
 
+  # Used by auxiliary/admin/smb/psexec_classic.rb to send ANDX writes with
+  # greater precision.
+  def write_raw(args)
+    pkt = CONST::SMB_WRITE_PKT.make_struct
+    self.smb_defaults(pkt['Payload']['SMB'])
+    pkt['Payload']['SMB'].v['Command'] = CONST::SMB_COM_WRITE_ANDX
+    pkt['Payload']['SMB'].v['Flags1'] = args[:flags1]
+    pkt['Payload']['SMB'].v['Flags2'] = args[:flags2]
+    pkt['Payload']['SMB'].v['WordCount'] = args[:wordcount]
+    pkt['Payload'].v['AndX'] = args[:andx_command]
+    pkt['Payload'].v['AndXOffset'] = args[:andx_offset]
+    pkt['Payload'].v['FileID'] = args[:file_id]
+    pkt['Payload'].v['Offset'] = args[:offset]
+    pkt['Payload'].v['Reserved2'] = -1
+    pkt['Payload'].v['WriteMode'] = args[:write_mode]
+    pkt['Payload'].v['Remaining'] = args[:remaining]
+    pkt['Payload'].v['DataLenHigh'] = args[:data_len_high]
+    pkt['Payload'].v['DataLenLow'] = args[:data_len_low]
+    pkt['Payload'].v['DataOffset'] = args[:data_offset]
+    pkt['Payload'].v['HighOffset'] = args[:high_offset]
+    pkt['Payload'].v['ByteCount'] = args[:byte_count]
+    pkt['Payload'].v['Payload'] = args[:data]
+    ret = self.smb_send(pkt.to_s)
+    return ret if not args[:do_recv]
+    ack = self.smb_recv_parse(CONST::SMB_COM_WRITE_ANDX)
+    return ack
+  end
 
   # Reads data from an open file handle
   def read(file_id = self.last_file_id, offset = 0, data_length = 64000, do_recv = true)
